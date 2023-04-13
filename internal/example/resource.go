@@ -15,6 +15,8 @@
 package example
 
 import (
+	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	"google.golang.org/protobuf/proto"
 	"time"
 
 	"google.golang.org/protobuf/types/known/anypb"
@@ -35,12 +37,97 @@ import (
 
 const (
 	ClusterName  = "example_proxy_cluster"
-	RouteName    = "local_route"
+	RouteName    = "sxf_local_route"
 	ListenerName = "listener_0"
 	ListenerPort = 10000
-	UpstreamHost = "www.envoyproxy.io"
+	UpstreamHost = "www.baidu.com"
 	UpstreamPort = 80
 )
+
+func makeCluster2(clusterName string, upstreamHost string, upstreamPort uint32) *cluster.Cluster {
+	sni := "blog.haohtml.com"
+	tlsContext := &tlsv3.UpstreamTlsContext{
+		//CommonTlsContext: &tlsv3.CommonTlsContext{
+		//	TlsParams: &tlsv3.TlsParameters{
+		//		CipherSuites: []string{
+		//			"ECDHE-ECDSA-AES256-GCM-SHA384",
+		//			"ECDHE-RSA-AES256-GCM-SHA384",
+		//			"ECDHE-ECDSA-AES128-GCM-SHA256",
+		//			"ECDHE-RSA-AES128-GCM-SHA256",
+		//			"ECDHE-ECDSA-CHACHA20-POLY1305",
+		//			"ECDHE-RSA-CHACHA20-POLY1305",
+		//			"ECDHE-ECDSA-AES128-SHA",
+		//			"ECDHE-RSA-AES128-SHA",
+		//			"AES128-GCM-SHA256",
+		//			"AES128-SHA",
+		//			"ECDHE-ECDSA-AES256-SHA",
+		//			"ECDHE-RSA-AES256-SHA",
+		//			"AES256-GCM-SHA384",
+		//			"AES256-SHA",
+		//		},
+		//		EcdhCurves: []string{
+		//			"X25519",
+		//			"P-256",
+		//		},
+		//	},
+		//	ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
+		//		ValidationContext: &tlsv3.CertificateValidationContext{
+		//			TrustedCa: &core.DataSource{
+		//				Specifier: &core.DataSource_EnvironmentVariable{EnvironmentVariable: "a"},
+		//			},
+		//			TrustChainVerification: tlsv3.CertificateValidationContext_ACCEPT_UNTRUSTED,
+		//			MatchTypedSubjectAltNames: []*tlsv3.SubjectAltNameMatcher{
+		//				{
+		//					SanType: tlsv3.SubjectAltNameMatcher_DNS,
+		//					Matcher: &matcherv3.StringMatcher{
+		//						MatchPattern: &matcherv3.StringMatcher_Exact{
+		//							Exact: sni,
+		//						},
+		//					},
+		//				},
+		//			},
+		//		},
+		//	},
+		//	AlpnProtocols: []string{
+		//		"h2",
+		//		"http/1.1",
+		//	},
+		//},
+		Sni: sni,
+	}
+
+	tlsConfig := new(anypb.Any)
+	_ = anypb.MarshalFrom(tlsConfig, tlsContext, proto.MarshalOptions{
+		AllowPartial:  true,
+		Deterministic: true,
+	})
+
+	c := &cluster.Cluster{
+		Name:                 clusterName,
+		ConnectTimeout:       durationpb.New(5 * time.Second),
+		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_LOGICAL_DNS},
+		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
+		LoadAssignment:       makeEndpoint2(clusterName, upstreamHost, upstreamPort),
+		DnsLookupFamily:      cluster.Cluster_V4_ONLY,
+		TransportSocketMatches: []*cluster.Cluster_TransportSocketMatch{
+			{
+				Name:  "tls_name",
+				Match: nil,
+				TransportSocket: &core.TransportSocket{
+					Name: "tls",
+					ConfigType: &core.TransportSocket_TypedConfig{
+						TypedConfig: tlsConfig,
+					},
+				},
+			},
+		},
+	}
+	if err := c.Validate(); err != nil {
+		print(err)
+	}
+
+	return c
+}
 
 func makeCluster(clusterName string) *cluster.Cluster {
 	return &cluster.Cluster{
@@ -78,6 +165,31 @@ func makeEndpoint(clusterName string) *endpoint.ClusterLoadAssignment {
 	}
 }
 
+func makeEndpoint2(clusterName, upstreamHost string, upstreamPort uint32) *endpoint.ClusterLoadAssignment {
+	return &endpoint.ClusterLoadAssignment{
+		ClusterName: clusterName,
+		Endpoints: []*endpoint.LocalityLbEndpoints{{
+			LbEndpoints: []*endpoint.LbEndpoint{{
+				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+					Endpoint: &endpoint.Endpoint{
+						Address: &core.Address{
+							Address: &core.Address_SocketAddress{
+								SocketAddress: &core.SocketAddress{
+									Protocol: core.SocketAddress_TCP,
+									Address:  upstreamHost,
+									PortSpecifier: &core.SocketAddress_PortValue{
+										PortValue: upstreamPort,
+									},
+								},
+							},
+						},
+					},
+				},
+			}},
+		}},
+	}
+}
+
 func makeRoute(routeName string, clusterName string) *route.RouteConfiguration {
 	return &route.RouteConfiguration{
 		Name: routeName,
@@ -104,6 +216,111 @@ func makeRoute(routeName string, clusterName string) *route.RouteConfiguration {
 		}},
 	}
 }
+
+func makeRouteNew(name string, path string, clusterName string, upstreamHost string) *route.Route {
+	return &route.Route{
+		Name: name,
+		Match: &route.RouteMatch{
+			PathSpecifier: &route.RouteMatch_Prefix{
+				Prefix: path,
+			},
+		},
+		Action: &route.Route_Route{
+			Route: &route.RouteAction{
+				ClusterSpecifier: &route.RouteAction_Cluster{
+					Cluster: clusterName,
+				},
+				HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
+					HostRewriteLiteral: upstreamHost,
+				},
+			},
+		},
+	}
+}
+
+func makeVirtualHost(name string, domains []string, routes []*route.Route) *route.VirtualHost {
+	return &route.VirtualHost{
+		Name:    name,
+		Domains: domains,
+		Routes:  routes,
+	}
+}
+
+func makeRouteConfiguration(name string, virtualHost []*route.VirtualHost) *route.RouteConfiguration {
+	return &route.RouteConfiguration{
+		Name:         name,
+		VirtualHosts: virtualHost,
+	}
+}
+
+//
+//func makeRoute2(routeName string, clusterName string, upstreamHost string) *route.RouteConfiguration {
+//	return &route.RouteConfiguration{
+//		Name: routeName,
+//		VirtualHosts: []*route.VirtualHost{
+//			{
+//				Name:    "local_service_A",
+//				Domains: []string{"a.test.cn:10000"},
+//				Routes: []*route.Route{{
+//					Match: &route.RouteMatch{
+//						PathSpecifier: &route.RouteMatch_Prefix{
+//							Prefix: "/",
+//						},
+//					},
+//					Action: &route.Route_Route{
+//						Route: &route.RouteAction{
+//							ClusterSpecifier: &route.RouteAction_Cluster{
+//								Cluster: clusterName,
+//							},
+//							HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
+//								HostRewriteLiteral: upstreamHost,
+//							},
+//						},
+//					},
+//				},
+//					{
+//						Match: &route.RouteMatch{
+//							PathSpecifier: &route.RouteMatch_Path{
+//								Path: "/duty",
+//							},
+//						},
+//						Action: &route.Route_Route{
+//							Route: &route.RouteAction{
+//								ClusterSpecifier: &route.RouteAction_Cluster{
+//									Cluster: clusterName,
+//								},
+//								HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
+//									HostRewriteLiteral: UpstreamHost,
+//								},
+//							},
+//						},
+//					},
+//				},
+//			},
+//			{
+//				Name:    "local_service_B",
+//				Domains: []string{"b.test.cn:10000"},
+//				Routes: []*route.Route{{
+//					Match: &route.RouteMatch{
+//						PathSpecifier: &route.RouteMatch_Prefix{
+//							Prefix: "/",
+//						},
+//					},
+//					Action: &route.Route_Route{
+//						Route: &route.RouteAction{
+//							ClusterSpecifier: &route.RouteAction_Cluster{
+//								Cluster: clusterName,
+//							},
+//							HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
+//								HostRewriteLiteral: UpstreamHost,
+//							},
+//						},
+//					},
+//				}},
+//			},
+//		},
+//	}
+//}
 
 func makeHTTPListener(listenerName string, route string) *listener.Listener {
 	routerConfig, _ := anypb.New(&router.Router{})
@@ -170,11 +387,16 @@ func makeConfigSource() *core.ConfigSource {
 }
 
 func GenerateSnapshot() *cache.Snapshot {
+	var routes []*route.Route
+	routes = append(routes, makeRouteNew("blog_root", "/", "blog", "blog.haohtml.com"))
+	var vhosts []*route.VirtualHost
+	vhosts = append(vhosts, makeVirtualHost("blog_vhost", []string{"c.test.cn:10000"}, routes))
+
 	snap, _ := cache.NewSnapshot("1",
 		map[resource.Type][]types.Resource{
-			resource.ClusterType:  {makeCluster(ClusterName)},
-			resource.RouteType:    {makeRoute(RouteName, ClusterName)},
-			resource.ListenerType: {makeHTTPListener(ListenerName, RouteName)},
+			resource.ClusterType:  {makeCluster2("blog", "blog.haohtml.com", 443)},
+			resource.RouteType:    {makeRouteConfiguration("blog_route_config", vhosts)}, //makeRoute(RouteName, ClusterName),
+			resource.ListenerType: {makeHTTPListener(ListenerName, "blog_route_config")},
 		},
 	)
 	return snap

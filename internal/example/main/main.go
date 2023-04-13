@@ -46,9 +46,6 @@ func init() {
 func main() {
 	flag.Parse()
 
-	// Create a cache
-	cache := cache.NewSnapshotCache(false, cache.IDHash{}, l)
-
 	// Create the snapshot that we'll serve to Envoy
 	snapshot := example.GenerateSnapshot()
 	if err := snapshot.Consistent(); err != nil {
@@ -57,6 +54,8 @@ func main() {
 	}
 	l.Debugf("will serve snapshot %+v", snapshot)
 
+	// Create a cache
+	cache := cache.NewSnapshotCache(false, cache.IDHash{}, l)
 	// Add the snapshot to the cache
 	if err := cache.SetSnapshot(context.Background(), nodeID, snapshot); err != nil {
 		l.Errorf("snapshot error %q for %+v", err, snapshot)
